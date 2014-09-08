@@ -28,7 +28,10 @@
 #
 # Edited by jfarcher to work with github
 # Edited by slabua to support custom installation folder
+# Edited by S0PH0S to enable support for nginx
 
+#Disable logging for nginx
+NGINX_DISABLE_LOGGING=false
 
 # Configure below the folder name where to install the software to,
 #  or leave empty to install to the root of the webserver.
@@ -42,7 +45,22 @@ case "$1" in
 
   remove)
         sudo killall raspimjpeg
-        sudo apt-get remove -y apache2 php5 libapache2-mod-php5 gpac motion zip
+        sudo apt-get remove -y apache2 php5 libapache2-mod-php5 gpac motion
+        sudo apt-get autoremove -y
+
+        sudo rm -r /var/www/$rpicamdir/*
+        sudo rm /etc/sudoers.d/RPI_Cam_Web_Interface
+        sudo rm /usr/bin/raspimjpeg
+        sudo rm /etc/raspimjpeg
+        sudo cp -r /etc/rc.local.bak /etc/rc.local
+        sudo chmod 755 /etc/rc.local
+
+        echo "Removed everything"
+        ;;
+
+  remove_nginx)
+        sudo killall raspimjpeg
+        sudo apt-get remove -y nginx php5 php5-fpm php5-common php-apc gpac motion
         sudo apt-get autoremove -y
 
         sudo rm -r /var/www/$rpicamdir/*
@@ -70,7 +88,7 @@ case "$1" in
   install)
         sudo killall raspimjpeg
         git pull origin master
-        sudo apt-get install -y apache2 php5 libapache2-mod-php5 gpac motion zip
+        sudo apt-get install -y apache2 php5 libapache2-mod-php5 gpac motion
 
         sudo mkdir -p /var/www/$rpicamdir/media
         sudo cp -r www/* /var/www/$rpicamdir/
@@ -78,17 +96,10 @@ case "$1" in
           sudo rm /var/www/$rpicamdir/index.html
         fi
         sudo chown -R www-data:www-data /var/www/$rpicamdir
-        
         if [ ! -e /var/www/$rpicamdir/FIFO ]; then
           sudo mknod /var/www/$rpicamdir/FIFO p
         fi
         sudo chmod 666 /var/www/$rpicamdir/FIFO
-        
-        if [ ! -e /var/www/$rpicamdir/FIFO1 ]; then
-          sudo mknod /var/www/$rpicamdir/FIFO1 p
-        fi
-        sudo chmod 666 /var/www/$rpicamdir/FIFO1
-        sudo chmod 666 /var/www/$rpicamdir/raspizip.sh
 
         if [ ! -e /var/www/$rpicamdir/cam.jpg ]; then
           sudo ln -sf /run/shm/mjpeg/cam.jpg /var/www/$rpicamdir/cam.jpg
@@ -121,10 +132,6 @@ case "$1" in
         sudo cp -r /etc/raspimjpeg /etc/raspimjpeg.bak
         sudo cp -r etc/raspimjpeg/raspimjpeg /etc/
         sudo chmod 644 /etc/raspimjpeg
-        if [ ! -e /var/www/$rpicamdir/raspimjpeg ]; then
-          sudo ln -s /etc/raspimjpeg /var/www/$rpicamdir/raspimjpeg
-        fi
-
 
         if [ "$rpicamdir" == "" ]; then
           cat etc/rc_local_run/rc.local.1 > etc/rc_local_run/rc.local
@@ -146,48 +153,127 @@ case "$1" in
         echo "Installer finished"
         ;;
 
-  update)
+  install_nginx)
+        # Update and ensure the program is not running and all prerequisites are installed
         sudo killall raspimjpeg
-        git pull origin master
-        sudo apt-get install -y zip
+        git pull origin nginx
+        sudo apt-get install -y nginx php5-fpm php5-common php-apc
+
+        # Move web interface code into place
+        sudo mkdir -p /var/www/$rpicamdir/media
+        sudo cp -r www/* /var/www/$rpicamdir/
+        if [ -e /var/www/$rpicamdir/index.html ]; then
+          sudo rm /var/www/$rpicamdir/index.html
+        fi
+        sudo chown -R www-data:www-data /var/www/$rpicamdir
+        if [ ! -e /var/www/$rpicamdir/FIFO ]; then
+          sudo mknod /var/www/$rpicamdir/FIFO p
+        fi
+        sudo chmod 666 /var/www/$rpicamdir/FIFO
+
+        if [ ! -e /var/www/$rpicamdir/cam.jpg ]; then
+          sudo ln -sf /run/shm/mjpeg/cam.jpg /var/www/$rpicamdir/cam.jpg
+        fi
+
+        # Install nginx server file
+        if [ "$rpicamdir" == "" ]; then
+          cat etc/nginx/sites-available/rpicam.1 > etc/nginx/sites-available/rpicam
+        else
+          sed -e "s:root /var/www;:root /var/www/$rpicamdir;:g" etc/nginx/sites-available/rpicam.1 > etc/nginx/sites-available/rpicam
+        fi
+        sudo cp -r etc/nginx/sites-available/rpicam /etc/nginx/sites-available/rpicam
+        sudo chmod 644 /etc/nginx/sites-available/rpicam
+        if [ ! -e /etc/nginx/sites-enabled/rpicam ]; then
+          sudo ln -s /etc/nginx/sites-available/rpicam /etc/nginx/sites-enabled/rpicam
+        fi
+
+        # Update nginx main config file
+        sudo sed -i "s/worker_processes 4;/worker_processes 2;/g" /etc/nginx/nginx.conf
+        sudo sed -i "s/worker_connections 768;/worker_connections 128;/g" /etc/nginx/nginx.conf
+        sudo sed -i "s/gzip on;/gzip off;/g" /etc/nginx/nginx.conf
+        if [ "$NGINX_DISABLE_LOGGING" ]; then
+            sudo sed -i "s:access_log /var/log/nginx/nginx/access.log;:access_log /dev/null;:g" /etc/nginx/nginx.conf
+        fi
+
+        # Configure php-apc
+        sudo sh -c "echo \"cgi.fix_pathinfo = 0;\" >> /etc/php5/fpm/php.ini"
+        sudo cp etc/php5/apc.ini /etc/php5/conf.d/20-apc.ini
+        sudo chmod 644 /etc/php5/conf.d/20-apc.ini
+
+        sudo cp etc/sudoers.d/RPI_Cam_Web_Interface /etc/sudoers.d/
+        sudo chmod 440 /etc/sudoers.d/RPI_Cam_Web_Interface
 
         sudo cp -r bin/raspimjpeg /opt/vc/bin/
         sudo chmod 755 /opt/vc/bin/raspimjpeg
-        sudo cp -r www/* /var/www/$rpicamdir/
-
-        if [ ! -e /var/www/raspimjpeg ]; then
-          sudo ln -s /etc/raspimjpeg /var/www/raspimjpeg
+        if [ ! -e /usr/bin/raspimjpeg ]; then
+          sudo ln -s /opt/vc/bin/raspimjpeg /usr/bin/raspimjpeg
         fi
-        sudo chmod 666 /var/www/$rpicamdir/raspizip.sh
 
-        echo "Update finished"
+        if [ "$rpicamdir" == "" ]; then
+          cat etc/raspimjpeg/raspimjpeg.1 > etc/raspimjpeg/raspimjpeg
+        else
+          sed -e "s/www/www\/$rpicamdir/" etc/raspimjpeg/raspimjpeg.1 > etc/raspimjpeg/raspimjpeg
+        fi
+        sudo cp -r /etc/raspimjpeg /etc/raspimjpeg.bak
+        sudo cp -r etc/raspimjpeg/raspimjpeg /etc/
+        sudo chmod 644 /etc/raspimjpeg
+
+        if [ "$rpicamdir" == "" ]; then
+          cat etc/rc_local_run/rc.local.1 > etc/rc_local_run/rc.local
+        else
+          sed -e "s/www/www\/$rpicamdir/" etc/rc_local_run/rc.local.1 > etc/rc_local_run/rc.local
+        fi
+        sudo cp -r /etc/rc.local /etc/rc.local.bak
+        sudo cp -r etc/rc_local_run/rc.local /etc/
+        sudo chmod 755 /etc/rc.local
+
+        if [ "$rpicamdir" == "" ]; then
+          cat etc/motion/motion.conf.1 > etc/motion/motion.conf
+        else
+          sed -e "s/www/www\/$rpicamdir/" etc/motion/motion.conf.1 > etc/motion/motion.conf
+        fi
+        sudo cp -r etc/motion/motion.conf /etc/motion/
+        sudo chmod 640 /etc/motion/motion.conf
+
+        # Restart nginx and php5-fpm to apply changes
+        sudo service nginx restart
+        sudo service php5-fpm restart
+
+        echo "Installer finished"
         ;;
 
   start)
-        ./$0 stop
-        sudo mkdir -p /dev/shm/mjpeg
-        sleep 1;sudo raspimjpeg > /dev/null &
-        sleep 1;sudo -u www-data php /var/www/schedule.php > /dev/null &
-        echo "Started"
-        ;;
+        shopt -s nullglob
 
-  debug)
-        ./$0 stop
+        video=-1
+        for f in /var/www/$rpicamdir/media/video_*.mp4; do
+          video=`echo $f | cut -d '_' -f2 | cut -d '.' -f1`
+        done
+        video=`echo $video | sed 's/^0*//'`
+        video=`expr $video + 1`
+
+        image=-1
+        for f in /var/www/$rpicamdir/media/image_*.jpg; do
+          image=`echo $f | cut -d '_' -f2 | cut -d '.' -f1`
+        done
+        image=`echo $image | sed 's/^0*//'`
+        image=`expr $image + 1`
+
+        shopt -u nullglob
+
         sudo mkdir -p /dev/shm/mjpeg
-        sleep 1;sudo raspimjpeg &
-        sleep 1;sudo -u www-data php /var/www/schedule.php &
-        echo "Started with debug"
+        sudo raspimjpeg -ic $image -vc $video > /dev/null &
+        echo "Started"
         ;;
 
   stop)
         sudo killall raspimjpeg
-        sudo killall php
-        sudo killall motion
+    sudo killall motion
         echo "Stopped"
         ;;
 
   *)
-        echo "No or invalid option selected"
+        echo "No option selected"
         ;;
 
 esac
